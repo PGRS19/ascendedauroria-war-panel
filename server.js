@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS users (
 )`);
 
 // Create default admin user
-bcrypt.hash("123456", 10, (err, hash) => {
+bcrypt.hash("ascendedwar@", 10, (err, hash) => {
   db.get("SELECT * FROM users WHERE username='admin'", (err, row) => {
     if (!row) {
       db.run("INSERT INTO users (username,password) VALUES (?,?)",
