@@ -8,7 +8,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const GUILD_NAME = "ShellPatrocina";
-const WORLD = "Auroria";
+const GUILD_URL = `https://rubinot.com.br/?subtopic=guilds&page=view&GuildName=${GUILD_NAME}`;
 
 // ===== BANCO =====
 const db = new sqlite3.Database("./database.sqlite");
@@ -23,26 +23,20 @@ db.serialize(() => {
   `);
 });
 
-// ===== SCRAPING =====
+// ===== SCRAPING SITE OFICIAL =====
 async function fetchGuildData() {
   try {
-    const response = await axios.get(
-      `https://rubinothings.com.br/guild.php?guild=${GUILD_NAME}&world=${WORLD}`,
-      {
-        timeout: 15000,
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept":
-            "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-          "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-          "Connection": "keep-alive",
-          "Upgrade-Insecure-Requests": "1",
-        },
-      }
-    );
+    const response = await axios.get(GUILD_URL, {
+      timeout: 15000,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+      },
+    });
 
-    console.log("✅ HTML recebido. Status:", response.status);
+    console.log("✅ HTML recebido:", response.status);
     console.log("📄 Tamanho HTML:", response.data.length);
 
     return response.data;
@@ -55,56 +49,49 @@ async function fetchGuildData() {
 // ===== PROCESSAR HTML =====
 async function updateGuildData() {
   const html = await fetchGuildData();
-
-  if (!html) {
-    console.log("❌ Nenhum HTML retornado.");
-    return;
-  }
+  if (!html) return;
 
   const $ = cheerio.load(html);
-
-  const tables = $("table");
-  console.log("🔎 Tabelas encontradas:", tables.length);
-
-  if (tables.length === 0) {
-    console.log("⚠ Nenhuma tabela encontrada.");
-    return;
-  }
-
   const today = new Date().toISOString().split("T")[0];
 
-  tables.each((i, table) => {
+  let encontrados = 0;
+
+  // Procurar todas as tabelas
+  $("table").each((i, table) => {
     const rows = $(table).find("tr");
 
     rows.each((j, row) => {
-      const columns = $(row).find("td");
+      const cols = $(row).find("td");
 
-      if (columns.length >= 2) {
-        const name = $(columns[0]).text().trim();
-        const expText = $(columns[1]).text().replace(/\./g, "").trim();
-        const exp = parseInt(expText);
+      if (cols.length >= 3) {
+        const name = $(cols[0]).text().trim();
+        const levelText = $(cols[1]).text().replace(/\D/g, "");
+        const level = parseInt(levelText);
 
-        if (name && !isNaN(exp)) {
+        if (name && !isNaN(level)) {
+          encontrados++;
+
+          // Vamos usar level como base até confirmarmos onde está XP
           db.run(
             "INSERT INTO players (name, exp, date) VALUES (?, ?, ?)",
-            [name, exp, today]
+            [name, level, today]
           );
         }
       }
     });
   });
 
-  console.log("✅ Processamento finalizado.");
+  console.log("🎯 Players encontrados:", encontrados);
 }
 
-// ===== CRON (10 em 10 minutos) =====
+// ===== CRON =====
 cron.schedule("*/10 * * * *", () => {
-  console.log("⏳ Rodando atualização automática...");
+  console.log("⏳ Atualizando guild...");
   updateGuildData();
 });
 
 // ===== ROTA PRINCIPAL =====
-app.get("/", async (req, res) => {
+app.get("/", (req, res) => {
   db.all(
     `
     SELECT 
@@ -118,41 +105,38 @@ app.get("/", async (req, res) => {
     [],
     (err, rows) => {
       if (err) {
-        res.send("Erro no banco.");
-      } else {
-        res.send(`
-          <h1>Guild ${GUILD_NAME}</h1>
-          <h2>XP Total Hoje</h2>
-          <p>Players encontrados: ${rows.length}</p>
-          <table border="1" cellpadding="5">
-            <tr>
-              <th>Player</th>
-              <th>XP Hoje</th>
-            </tr>
-            ${rows
-              .map(
-                (r) =>
-                  `<tr><td>${r.name}</td><td>${r.total_exp}</td></tr>`
-              )
-              .join("")}
-          </table>
-        `);
+        return res.send("Erro no banco.");
       }
+
+      res.send(`
+        <h1>Guild ${GUILD_NAME}</h1>
+        <h2>Ranking Hoje</h2>
+        <p>Total players: ${rows.length}</p>
+        <table border="1" cellpadding="5">
+          <tr>
+            <th>Player</th>
+            <th>Total Registrado</th>
+          </tr>
+          ${rows
+            .map(
+              (r) =>
+                `<tr><td>${r.name}</td><td>${r.total_exp}</td></tr>`
+            )
+            .join("")}
+        </table>
+      `);
     }
   );
 });
 
-// ===== ROTA DEBUG =====
+// ===== DEBUG =====
 app.get("/debug", async (req, res) => {
   const html = await fetchGuildData();
-
-  if (!html) {
-    return res.send("Erro ao buscar HTML.");
-  }
+  if (!html) return res.send("Erro ao buscar HTML.");
 
   res.send(`
-    <h2>Debug HTML</h2>
-    <p>Tamanho: ${html.length}</p>
+    <h2>Debug Rubinot</h2>
+    <p>Tamanho HTML: ${html.length}</p>
     <pre style="white-space: pre-wrap; font-size:10px;">
       ${html.substring(0, 5000)}
     </pre>
