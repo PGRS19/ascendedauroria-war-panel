@@ -8,7 +8,10 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const GUILD_NAME = "ShellPatrocina";
+const WORLD = "Auroria";
+
 const GUILD_URL = `https://rubinot.com.br/?subtopic=guilds&page=view&GuildName=${GUILD_NAME}`;
+const HIGHSCORE_URL = `https://rubinot.com.br/?subtopic=highscores&world=${WORLD}&category=experience`;
 
 // ===== BANCO =====
 const db = new sqlite3.Database("./database.sqlite");
@@ -23,72 +26,90 @@ db.serialize(() => {
   `);
 });
 
-// ===== SCRAPING SITE OFICIAL =====
-async function fetchGuildData() {
+// ===== PEGAR MEMBROS DA GUILD =====
+async function fetchGuildMembers() {
   try {
-    const response = await axios.get(GUILD_URL, {
-      timeout: 15000,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-      },
-    });
+    const response = await axios.get(GUILD_URL);
+    const $ = cheerio.load(response.data);
 
-    console.log("✅ HTML recebido:", response.status);
-    console.log("📄 Tamanho HTML:", response.data.length);
+    let members = [];
 
-    return response.data;
-  } catch (error) {
-    console.error("❌ Erro scraping:", error.response?.status || error.message);
-    return null;
-  }
-}
-
-// ===== PROCESSAR HTML =====
-async function updateGuildData() {
-  const html = await fetchGuildData();
-  if (!html) return;
-
-  const $ = cheerio.load(html);
-  const today = new Date().toISOString().split("T")[0];
-
-  let encontrados = 0;
-
-  // Procurar todas as tabelas
-  $("table").each((i, table) => {
-    const rows = $(table).find("tr");
-
-    rows.each((j, row) => {
-      const cols = $(row).find("td");
-
-      if (cols.length >= 3) {
-        const name = $(cols[0]).text().trim();
-        const levelText = $(cols[1]).text().replace(/\D/g, "");
-        const level = parseInt(levelText);
-
-        if (name && !isNaN(level)) {
-          encontrados++;
-
-          // Vamos usar level como base até confirmarmos onde está XP
-          db.run(
-            "INSERT INTO players (name, exp, date) VALUES (?, ?, ?)",
-            [name, level, today]
-          );
+    $("a").each((i, el) => {
+      const href = $(el).attr("href");
+      if (href && href.includes("subtopic=characters")) {
+        const name = $(el).text().trim();
+        if (name.length > 0) {
+          members.push(name);
         }
       }
     });
+
+    console.log("👥 Membros encontrados:", members.length);
+    return members;
+  } catch (err) {
+    console.error("Erro buscando guild:", err.message);
+    return [];
+  }
+}
+
+// ===== PEGAR HIGHSCORES =====
+async function fetchHighscores() {
+  try {
+    const response = await axios.get(HIGHSCORE_URL);
+    const $ = cheerio.load(response.data);
+
+    let players = [];
+
+    $("table tr").each((i, row) => {
+      const cols = $(row).find("td");
+
+      if (cols.length >= 6) {
+        const name = $(cols[1]).text().trim();
+        const pointsText = $(cols[5]).text().replace(/\./g, "").trim();
+        const points = parseInt(pointsText);
+
+        if (name && !isNaN(points)) {
+          players.push({ name, points });
+        }
+      }
+    });
+
+    console.log("🏆 Highscores capturados:", players.length);
+    return players;
+  } catch (err) {
+    console.error("Erro buscando highscores:", err.message);
+    return [];
+  }
+}
+
+// ===== ATUALIZAR DADOS =====
+async function updateData() {
+  console.log("⏳ Atualizando dados...");
+
+  const members = await fetchGuildMembers();
+  if (members.length === 0) return;
+
+  const highscores = await fetchHighscores();
+  if (highscores.length === 0) return;
+
+  const today = new Date().toISOString().split("T")[0];
+
+  members.forEach(member => {
+    const playerData = highscores.find(p => p.name === member);
+
+    if (playerData) {
+      db.run(
+        "INSERT INTO players (name, exp, date) VALUES (?, ?, ?)",
+        [playerData.name, playerData.points, today]
+      );
+    }
   });
 
-  console.log("🎯 Players encontrados:", encontrados);
+  console.log("✅ Atualização concluída.");
 }
 
 // ===== CRON =====
-cron.schedule("*/10 * * * *", () => {
-  console.log("⏳ Atualizando guild...");
-  updateGuildData();
-});
+cron.schedule("*/10 * * * *", updateData);
 
 // ===== ROTA PRINCIPAL =====
 app.get("/", (req, res) => {
@@ -96,51 +117,34 @@ app.get("/", (req, res) => {
     `
     SELECT 
       name,
-      SUM(exp) as total_exp
+      MAX(exp) - MIN(exp) as gained_today
     FROM players
     WHERE date = date('now')
     GROUP BY name
-    ORDER BY total_exp DESC
+    ORDER BY gained_today DESC
     `,
     [],
     (err, rows) => {
-      if (err) {
-        return res.send("Erro no banco.");
-      }
+      if (err) return res.send("Erro no banco.");
 
       res.send(`
         <h1>Guild ${GUILD_NAME}</h1>
-        <h2>Ranking Hoje</h2>
-        <p>Total players: ${rows.length}</p>
+        <h2>XP Ganha Hoje</h2>
         <table border="1" cellpadding="5">
           <tr>
             <th>Player</th>
-            <th>Total Registrado</th>
+            <th>XP Hoje</th>
           </tr>
           ${rows
             .map(
-              (r) =>
-                `<tr><td>${r.name}</td><td>${r.total_exp}</td></tr>`
+              r =>
+                `<tr><td>${r.name}</td><td>${r.gained_today || 0}</td></tr>`
             )
             .join("")}
         </table>
       `);
     }
   );
-});
-
-// ===== DEBUG =====
-app.get("/debug", async (req, res) => {
-  const html = await fetchGuildData();
-  if (!html) return res.send("Erro ao buscar HTML.");
-
-  res.send(`
-    <h2>Debug Rubinot</h2>
-    <p>Tamanho HTML: ${html.length}</p>
-    <pre style="white-space: pre-wrap; font-size:10px;">
-      ${html.substring(0, 5000)}
-    </pre>
-  `);
 });
 
 // ===== START =====
