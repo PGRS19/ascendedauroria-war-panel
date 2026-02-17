@@ -3,7 +3,6 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 const sqlite3 = require("sqlite3").verbose();
 const cron = require("node-cron");
-const path = require("path");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -24,7 +23,7 @@ db.serialize(() => {
   `);
 });
 
-// ===== SCRAPING COM HEADERS REAIS =====
+// ===== SCRAPING =====
 async function fetchGuildData() {
   try {
     const response = await axios.get(
@@ -43,6 +42,9 @@ async function fetchGuildData() {
       }
     );
 
+    console.log("✅ HTML recebido. Status:", response.status);
+    console.log("📄 Tamanho HTML:", response.data.length);
+
     return response.data;
   } catch (error) {
     console.error("❌ Erro scraping:", error.response?.status || error.message);
@@ -53,39 +55,56 @@ async function fetchGuildData() {
 // ===== PROCESSAR HTML =====
 async function updateGuildData() {
   const html = await fetchGuildData();
-  if (!html) return;
+
+  if (!html) {
+    console.log("❌ Nenhum HTML retornado.");
+    return;
+  }
 
   const $ = cheerio.load(html);
+
+  const tables = $("table");
+  console.log("🔎 Tabelas encontradas:", tables.length);
+
+  if (tables.length === 0) {
+    console.log("⚠ Nenhuma tabela encontrada.");
+    return;
+  }
+
   const today = new Date().toISOString().split("T")[0];
 
-  $("table tr").each((i, el) => {
-    const columns = $(el).find("td");
+  tables.each((i, table) => {
+    const rows = $(table).find("tr");
 
-    if (columns.length >= 2) {
-      const name = $(columns[0]).text().trim();
-      const expText = $(columns[1]).text().replace(/\./g, "").trim();
-      const exp = parseInt(expText);
+    rows.each((j, row) => {
+      const columns = $(row).find("td");
 
-      if (!isNaN(exp)) {
-        db.run(
-          "INSERT INTO players (name, exp, date) VALUES (?, ?, ?)",
-          [name, exp, today]
-        );
+      if (columns.length >= 2) {
+        const name = $(columns[0]).text().trim();
+        const expText = $(columns[1]).text().replace(/\./g, "").trim();
+        const exp = parseInt(expText);
+
+        if (name && !isNaN(exp)) {
+          db.run(
+            "INSERT INTO players (name, exp, date) VALUES (?, ?, ?)",
+            [name, exp, today]
+          );
+        }
       }
-    }
+    });
   });
 
-  console.log("✅ Dados atualizados em", new Date().toLocaleString());
+  console.log("✅ Processamento finalizado.");
 }
 
-// ===== CRON JOB (a cada 10 minutos) =====
+// ===== CRON (10 em 10 minutos) =====
 cron.schedule("*/10 * * * *", () => {
-  console.log("⏳ Atualizando guild...");
+  console.log("⏳ Rodando atualização automática...");
   updateGuildData();
 });
 
-// ===== ROTAS =====
-app.get("/", (req, res) => {
+// ===== ROTA PRINCIPAL =====
+app.get("/", async (req, res) => {
   db.all(
     `
     SELECT 
@@ -103,7 +122,8 @@ app.get("/", (req, res) => {
       } else {
         res.send(`
           <h1>Guild ${GUILD_NAME}</h1>
-          <h2>XP Total de Hoje</h2>
+          <h2>XP Total Hoje</h2>
+          <p>Players encontrados: ${rows.length}</p>
           <table border="1" cellpadding="5">
             <tr>
               <th>Player</th>
@@ -122,7 +142,24 @@ app.get("/", (req, res) => {
   );
 });
 
-// ===== INICIAR =====
+// ===== ROTA DEBUG =====
+app.get("/debug", async (req, res) => {
+  const html = await fetchGuildData();
+
+  if (!html) {
+    return res.send("Erro ao buscar HTML.");
+  }
+
+  res.send(`
+    <h2>Debug HTML</h2>
+    <p>Tamanho: ${html.length}</p>
+    <pre style="white-space: pre-wrap; font-size:10px;">
+      ${html.substring(0, 5000)}
+    </pre>
+  `);
+});
+
+// ===== START =====
 app.listen(PORT, () => {
   console.log("🚀 Servidor rodando na porta", PORT);
 });
