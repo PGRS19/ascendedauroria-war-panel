@@ -1,3 +1,4 @@
+
 const express = require("express");
 const axios = require("axios");
 const cheerio = require("cheerio");
@@ -32,7 +33,7 @@ CREATE TABLE IF NOT EXISTS users (
   password TEXT
 )`);
 
-// cria admin padrão
+// Create default admin user
 bcrypt.hash("123456", 10, (err, hash) => {
   db.get("SELECT * FROM users WHERE username='admin'", (err, row) => {
     if (!row) {

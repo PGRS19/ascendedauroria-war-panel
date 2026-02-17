@@ -1,0 +1,17 @@
+
+body {
+  background-color: #111;
+  color: white;
+  font-family: Arial;
+  text-align: center;
+}
+
+table {
+  margin: auto;
+  border-collapse: collapse;
+}
+
+th, td {
+  border: 1px solid #444;
+  padding: 8px;
+}
