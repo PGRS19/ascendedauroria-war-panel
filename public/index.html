@@ -1,15 +1,173 @@
-
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Ascended Auroria War Panel</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <title>Guild XP - ShellPatrocina</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { font-family: Arial; background:#0f0f0f; color:white; text-align:center; }
+    table { margin:auto; border-collapse: collapse; width:95%; }
+    th, td { padding:8px; border:1px solid #333; }
+    th { background:#1f1f1f; }
+    tr:nth-child(even){ background:#181818; }
+    h1 { color:#00ff99; }
+  </style>
 </head>
 <body>
-<h1>Ascended Auroria - War XP Panel</h1>
-<button onclick="logout()">Logout</button>
-<h2>XP Histórico</h2>
-<table id="xpTable"></table>
-<script src="script.js"></script>
+
+<h1>Guild ShellPatrocina - Auroria</h1>
+<p>XP Tracker Completo</p>
+
+<table>
+<thead>
+<tr>
+<th>Player</th>
+<th>XP Atual</th>
+<th>XP Hoje</th>
+<th>XP 7 Dias</th>
+<th>XP 30 Dias</th>
+</tr>
+</thead>
+<tbody id="ranking">
+<tr><td colspan="5">Carregando...</td></tr>
+</tbody>
+</table>
+
+<script>
+
+const SUPABASE_URL = "https://okaqfigktywdrgjgkgat.supabase.co";
+const SUPABASE_KEY = "sb_publishable_us73JiP42iKbyx3wz9yMDw_nXI5ijzH";
+
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const proxy = url => 
+  "https://api.allorigins.win/raw?url=" + encodeURIComponent(url);
+
+const guildURL = proxy(
+  "https://rubinot.com.br/?subtopic=guilds&page=view&GuildName=ShellPatrocina"
+);
+
+const characterURL = name =>
+  proxy("https://rubinot.com.br/?subtopic=characters&name=" + name);
+
+async function fetchHTML(url){
+  const res = await fetch(url);
+  return await res.text();
+}
+
+function extractMembers(html){
+  const regex = /subtopic=characters&name=([^"]+)/g;
+  let members = [];
+  let match;
+  while((match = regex.exec(html)) !== null){
+    members.push(decodeURIComponent(match[1]));
+  }
+  return [...new Set(members)];
+}
+
+function extractXP(html){
+  const match = html.match(/Experience:\s*([\d\.]+)/i);
+  if(!match) return 0;
+  return parseInt(match[1].replace(/\./g,""));
+}
+
+async function saveXP(player,xp){
+  const today = new Date().toISOString().split("T")[0];
+
+  const { data } = await supabase
+    .from("xp_history")
+    .select("*")
+    .eq("player",player)
+    .eq("date",today);
+
+  if(data.length === 0){
+    await supabase.from("xp_history").insert([
+      { player:player, xp:xp, date:today }
+    ]);
+  }
+}
+
+async function getHistory(player){
+  const { data } = await supabase
+    .from("xp_history")
+    .select("*")
+    .eq("player",player)
+    .order("date",{ascending:true});
+  return data || [];
+}
+
+function calculateDiff(history,days){
+  if(history.length < 2) return 0;
+
+  const latest = history[history.length-1].xp;
+
+  const targetDate = new Date();
+  targetDate.setDate(targetDate.getDate()-days);
+
+  let closest = history[0];
+
+  history.forEach(h=>{
+    if(new Date(h.date) <= targetDate){
+      closest = h;
+    }
+  });
+
+  return latest - closest.xp;
+}
+
+async function run(){
+
+  const tbody = document.getElementById("ranking");
+  tbody.innerHTML = "<tr><td colspan='5'>Atualizando...</td></tr>";
+
+  try{
+
+    const guildHTML = await fetchHTML(guildURL);
+    const members = extractMembers(guildHTML);
+
+    let results = [];
+
+    for(const player of members){
+
+      const playerHTML = await fetchHTML(characterURL(player));
+      const xp = extractXP(playerHTML);
+
+      await saveXP(player,xp);
+      const history = await getHistory(player);
+
+      results.push({
+        player,
+        xp,
+        xpHoje: calculateDiff(history,1),
+        xp7: calculateDiff(history,7),
+        xp30: calculateDiff(history,30)
+      });
+    }
+
+    results.sort((a,b)=>b.xpHoje - a.xpHoje);
+
+    tbody.innerHTML = "";
+
+    results.forEach(r=>{
+      tbody.innerHTML += `
+      <tr>
+        <td>${r.player}</td>
+        <td>${r.xp.toLocaleString()}</td>
+        <td>${r.xpHoje.toLocaleString()}</td>
+        <td>${r.xp7.toLocaleString()}</td>
+        <td>${r.xp30.toLocaleString()}</td>
+      </tr>`;
+    });
+
+  }catch(e){
+    tbody.innerHTML = "<tr><td colspan='5'>Erro ao buscar dados.</td></tr>";
+  }
+
+}
+
+run();
+
+</script>
+
 </body>
 </html>
